@@ -2,6 +2,7 @@
 
 import sys
 import os
+import readline; assert readline
 import os.path as op
 from uuid import uuid4
 from copy import deepcopy
@@ -123,6 +124,9 @@ class Storage(StorageDBModel):
 
   def __str__(self):
     return f'Storage(root={self.root})'
+
+  def disconnect(self):
+    STORAGE_DB.close()
 
   def print_info(self):
     print('Storage Info')
@@ -363,7 +367,7 @@ def backup(backup_dirs, storages, resume_log):
     if not st:
       return
 
-  def next_storage(existing_backup_set=None):
+  def get_next_storage(existing_backup_set=None):
     if len(storages) == 0:
       return None, None
 
@@ -384,7 +388,7 @@ def backup(backup_dirs, storages, resume_log):
   # we must do this before do anything else with BackupSet
   # bc Storage.init() is called by next_storage() which
   # opens the backing DB
-  cur_storage, _ = next_storage()
+  cur_storage, _ = get_next_storage()
 
   if backup_log.backup_set_uuid:
     cur_bk_set = BackupSet.get(uuid=backup_log.backup_set_uuid)
@@ -418,13 +422,27 @@ def backup(backup_dirs, storages, resume_log):
             while not done:
               file_transaction, outofspace = cur_storage.backup_file(fpath_abs, cur_bk_set)
               if outofspace:
-                cur_storage, cur_bk_set = next_storage(cur_bk_set)
-                if cur_storage is None:
-                  # we have no more storage left, bail!
-                  print(f'No more Storage left. Attach additional Storage and resume using '
-                        f'\n\t{sys.argv[0]} --resume-using {backup_log.db_path} ...'
-                        f'\nOr run again and see if we can fit smaller files around existing files')
-                  return
+                # disconnect so the storage can be removed from the host
+                cur_storage.disconnect()
+                cur_storage = None
+                while cur_storage is None:
+                  next_storage, next_bk_set = get_next_storage(cur_bk_set)
+                  if next_storage:
+                    cur_storage = next_storage
+                    cur_bk_set = next_bk_set
+                  else:
+                    new_storage = click.prompt('No more storage left. Enter path '
+                                               'to new Storage or "STOP" to exit program')
+                    if new_storage == 'STOP':
+                      print(f'Attach additional Storage and resume using '
+                            f'\n\t{sys.argv[0]} --resume-using {backup_log.db_path} ...'
+                            f'\nOr run again and see if we can fit smaller files around existing files')
+                      return
+                    elif op.exists(new_storage):
+                      storages.append(new_storage)
+                    else:
+                      print('Invalid path', new_storage)
+
               else:
                 assert file_transaction, 'Not out of space but also no file transaction recorded'
                 backup_log.log(file_transaction, cur_storage)

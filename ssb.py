@@ -269,7 +269,9 @@ class Storage(StorageDBModel):
         os.makedirs(dstdir, exist_ok=True)
 
         ifh = os.open(fpath, os.O_RDONLY | O_BINARY)
-        ofh = os.open(dst, os.O_WRONLY | os.O_CREAT | O_BINARY)
+
+        # O_TRUNC so if the existing file needs to be overwritten it will be
+        ofh = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | O_BINARY)
 
         m = sha256()
         while not done:

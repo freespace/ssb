@@ -37,7 +37,7 @@ class BackupLogEntry(LogDBModel):
   dest_path = pw.CharField(max_length=512, index=True)
   size = pw.IntegerField()
   timestamp = pw.DateTimeField()
-  sha256_hash = pw.CharField()
+  sha256hash = pw.CharField()
   storage_uuid = pw.UUIDField()
 
   def __str__(self):
@@ -86,7 +86,7 @@ class BackupLog(LogDBModel):
                            dest_path=file_transaction.dest_path,
                            size=file_transaction.size,
                            timestamp=file_transaction.timestamp,
-                           sha256_hash=file_transaction.sha256_hash,
+                           sha256hash=file_transaction.sha256hash,
                            storage_uuid=storage.uuid)
     entry.save()
 
@@ -100,20 +100,21 @@ class BackupSet(StorageDBModel):
   host = pw.CharField()
   version = pw.IntegerField()
   sequence_number = pw.IntegerField()
+  is_final = pw.BooleanField()
 
 class FileTransaction(StorageDBModel):
   source_path = pw.CharField(max_length=512, index=True)
   dest_path = pw.CharField(max_length=512, index=True)
   size = pw.IntegerField()
   timestamp = pw.DateTimeField()
-  sha256_hash = pw.CharField()
+  sha256hash = pw.CharField()
   version = pw.IntegerField()
 
   backup_set = pw.ForeignKeyField(BackupSet, backref='files')
 
   def __str__(self):
     hp = f'{self.backup_set.host}:{self.source_path}'
-    return f'{hp:64}\t{self.size}\t{self.sha256_hash}'
+    return f'{hp:64}\t{self.size}\t{self.sha256hash}'
 
 class Storage(StorageDBModel):
   uuid = pw.UUIDField()
@@ -133,11 +134,15 @@ class Storage(StorageDBModel):
     print(f'Files: {fcount}')
 
     bkidset = set()
+    finalcount = 0
     for bkset in BackupSet.select():
       bkidset.add(bkset.uuid)
+      if bkset.is_final:
+        finalcount += 1
 
     bksetcount = len(bkidset)
     print(f'Backup Sets: {bksetcount}')
+    print(f'  Finals: {finalcount}')
 
     print('')
 
@@ -147,7 +152,7 @@ class Storage(StorageDBModel):
                          dest_path=dst,
                          size=src_size,
                          timestamp=datetime.utcnow(),
-                         sha256_hash=sha256hash,
+                         sha256hash=sha256hash,
                          version=1,
                          backup_set=bk_set)
     ft.save()
@@ -256,7 +261,7 @@ class Storage(StorageDBModel):
             done = True
         if done:
           print('done')
-          tf.sha256_hash = m.hexdigest()
+          tf.sha256hash = m.hexdigest()
           tf.save()
     except OSError as ex:
       if ex.errno == 28:
@@ -390,7 +395,8 @@ def backup(backup_dirs, storages, resume_log):
                            timestamp=datetime.utcnow(),
                            host=gethostname(),
                            version=1,
-                           sequence_number=0)
+                           sequence_number=0,
+                           is_final=False)
     cur_bk_set.save()
     backup_log.backup_set_uuid = cur_bk_set.uuid
     backup_log.save()
@@ -415,7 +421,6 @@ def backup(backup_dirs, storages, resume_log):
                 cur_storage, cur_bk_set = next_storage(cur_bk_set)
                 if cur_storage is None:
                   # we have no more storage left, bail!
-                  backup_log.save()
                   print(f'No more Storage left. Attach additional Storage and resume using '
                         f'\n\t{sys.argv[0]} --resume-using {backup_log.db_path} ...'
                         f'\nOr run again and see if we can fit smaller files around existing files')
@@ -426,7 +431,8 @@ def backup(backup_dirs, storages, resume_log):
                 done = True
           except Exception as ex:
             raise ex
-
+  cur_bk_set.is_final = True
+  cur_bk_set.save()
   print('Backup complete')
 
 if __name__ == '__main__':

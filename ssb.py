@@ -40,6 +40,9 @@ class BackupLogEntry(LogDBModel):
   sha256_hash = pw.CharField()
   storage_uuid = pw.UUIDField()
 
+  def __str__(self):
+    return f'storage:{self.storage_uuid}\t{self.source_path}'
+
 class BackupLog(LogDBModel):
   uuid = pw.UUIDField()
   version = pw.IntegerField()
@@ -119,6 +122,19 @@ class Storage(StorageDBModel):
 
   def __str__(self):
     return f'Storage(root={self.root})'
+
+  def print_info(self):
+    print('Storage Info')
+    print('============')
+    print(f'uuid={self.uuid}')
+
+    fcount = FileTransaction.select().count()
+    print(f'Files: {fcount}')
+
+    bksetcount = BackupSet.select().count()
+    print(f'Backup Sets: {bksetcount}')
+
+    print('')
 
   def record_transaction(self, src, dst, sha256hash, bk_set):
     src_size = os.stat(src).st_size
@@ -283,7 +299,7 @@ def cli():
 
 @cli.command()
 @click.argument('storage_dir',
-                type=click.Path(file_okay=True, exists=True, writable=True),
+                type=click.Path(file_okay=False, exists=True),
                 required=True)
 def storage_init(storage_dir):
   Storage.init(storage_dir)
@@ -291,14 +307,32 @@ def storage_init(storage_dir):
 @cli.command()
 @click.argument('storage_dir',
                 nargs=-1,
-                type=click.Path(file_okay=True, exists=True, writable=True),
+                type=click.Path(file_okay=False, exists=True),
                 required=True)
-def storage_list_files(storage_dir):
+def storage_ls(storage_dir):
   for sdir in storage_dir:
     Storage.init(sdir, reuse=True, exists=True)
     for tf in FileTransaction.select():
       print(tf)
 
+@cli.command()
+@click.argument('storage_dir',
+                nargs=-1,
+                type=click.Path(file_okay=False, exists=True),
+                required=True)
+def storage_info(storage_dir):
+  for sdir in storage_dir:
+    s = Storage.init(sdir, reuse=True, exists=True)
+    s.print_info()
+
+@cli.command()
+@click.argument('log_db',
+                type=click.Path(dir_okay=False, exists=True),
+                required=True)
+def log_ls(log_db):
+  BackupLog.load(log_db)
+  for ent in BackupLogEntry.select():
+    print(ent)
 @cli.command()
 @click.option('-b', '--backup', 'backup_dirs', type=click.Path(exists=True), required=True,
               multiple=True,

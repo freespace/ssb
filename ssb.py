@@ -108,6 +108,10 @@ class FileTransaction(StorageDBModel):
 
   backup_set = pw.ForeignKeyField(BackupSet, backref='files')
 
+  def __str__(self):
+    hp = f'{self.backup_set.host}:{self.source_path}'
+    return f'{hp:64}\t{self.size}\t{self.sha256_hash}'
+
 class Storage(StorageDBModel):
   uuid = pw.UUIDField()
   version = pw.IntegerField()
@@ -129,11 +133,13 @@ class Storage(StorageDBModel):
     return ft
 
   @classmethod
-  def init(cls, dirpath, reuse=True):
+  def init(cls, dirpath, reuse=True, exists=False):
     """
     :param dirpath: path to initialise
     :param reuse: if False and a Storage DB already exists then an exception
                   will be thrown. Otherwise the existing Storage DB will be used.
+    :param exists: requires the Storage DB to exist already. Will not create
+                   a new Storage DB
     :return: Storage object stored in the DB
     """
     db_path = None
@@ -147,6 +153,8 @@ class Storage(StorageDBModel):
           create_new = False
 
     if db_path is None:
+      if exists:
+        raise Exception(f'Storage not found at {dirpath}')
       # create a new UUID for this storage
       storage_id = uuid4()
       db_name = f'{STORAGE_DB_PREFIX}-{str(storage_id)}.sqlite'
@@ -264,6 +272,8 @@ class Storage(StorageDBModel):
       if outofspace:
         # remove the partial file
         os.unlink(dst)
+        FileTransaction.delete_instance(tf)
+        tf = None
 
       return tf, outofspace
 
@@ -277,6 +287,17 @@ def cli():
                 required=True)
 def storage_init(storage_dir):
   Storage.init(storage_dir)
+
+@cli.command()
+@click.argument('storage_dir',
+                nargs=-1,
+                type=click.Path(file_okay=True, exists=True, writable=True),
+                required=True)
+def storage_list_files(storage_dir):
+  for sdir in storage_dir:
+    Storage.init(sdir, reuse=True, exists=True)
+    for tf in FileTransaction.select():
+      print(tf)
 
 @cli.command()
 @click.option('-b', '--backup', 'backup_dirs', type=click.Path(exists=True), required=True,

@@ -2,7 +2,11 @@
 
 import sys
 import os
-import readline; assert readline
+try:
+  import readline; assert readline
+except:
+  pass
+import platform
 import os.path as op
 from uuid import uuid4
 from copy import deepcopy
@@ -227,9 +231,21 @@ class Storage(StorageDBModel):
 
       # make really sure it is an absolute path
       fpath = op.abspath(fpath)
-      dst = op.join(self.root, gethostname(), fpath[1:])
+      
+      sysname = platform.system()
+      if sysname == 'Linux':
+        # remove leading /
+        dstsuffix = fpath[1:]
+      if sysname == 'Windows':
+        # remove : from c:\
+        dstsuffix = fpath[0] + fpath[2:]
+       
+      suffix = op.join(gethostname(), dstsuffix)
+      suffix = suffix.replace(':', '')
+      dst = op.join(self.root, suffix)
+      
       assert dst.startswith(self.root)
-
+ 
       done = False
 
       print(f'{fpath} -> {self}...', end='')

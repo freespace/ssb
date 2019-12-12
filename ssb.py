@@ -126,12 +126,17 @@ class Storage(StorageDBModel):
   def print_info(self):
     print('Storage Info')
     print('============')
-    print(f'uuid={self.uuid}')
+    print(f'root: {self.root}')
+    print(f'uuid: {self.uuid}')
 
     fcount = FileTransaction.select().count()
     print(f'Files: {fcount}')
 
-    bksetcount = BackupSet.select().count()
+    bkidset = set()
+    for bkset in BackupSet.select():
+      bkidset.add(bkset.uuid)
+
+    bksetcount = len(bkidset)
     print(f'Backup Sets: {bksetcount}')
 
     print('')
@@ -378,6 +383,7 @@ def backup(backup_dirs, storages, resume_log):
 
   if backup_log.backup_set_uuid:
     cur_bk_set = BackupSet.get(uuid=backup_log.backup_set_uuid)
+    print('Resuming Backupset', cur_bk_set)
   else:
     cur_bk_set = BackupSet(uuid=uuid4(),
                            backup_dirs='\0'.join(backup_dirs),
@@ -386,6 +392,10 @@ def backup(backup_dirs, storages, resume_log):
                            version=1,
                            sequence_number=0)
     cur_bk_set.save()
+    backup_log.backup_set_uuid = cur_bk_set.uuid
+    backup_log.save()
+
+    print('Created new Backupset', cur_bk_set)
 
   for bakdir in backup_dirs:
     for (root, dirnames, filenames) in os.walk(bakdir):
@@ -408,7 +418,7 @@ def backup(backup_dirs, storages, resume_log):
                   backup_log.save()
                   print(f'No more Storage left. Attach additional Storage and resume using '
                         f'\n\t{sys.argv[0]} --resume-using {backup_log.db_path} ...'
-                        f'\nOr run again and see if we can fit smaller files around existinf files')
+                        f'\nOr run again and see if we can fit smaller files around existing files')
                   return
               else:
                 assert file_transaction, 'Not out of space but also no file transaction recorded'

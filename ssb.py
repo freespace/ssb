@@ -315,7 +315,7 @@ class Storage(StorageDBModel):
       except:
         pass
 
-      if outofspace:
+      if outofspace or not done:
         # remove the partial file
         os.unlink(dst)
         FileTransaction.delete_instance(tf)

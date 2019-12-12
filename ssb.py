@@ -231,21 +231,23 @@ class Storage(StorageDBModel):
 
       # make really sure it is an absolute path
       fpath = op.abspath(fpath)
-      
+
       sysname = platform.system()
+      O_BINARY = 0
       if sysname == 'Linux':
         # remove leading /
         dstsuffix = fpath[1:]
       if sysname == 'Windows':
         # remove : from c:\
         dstsuffix = fpath[0] + fpath[2:]
-       
+        O_BINARY = os.O_BINARY
+
       suffix = op.join(gethostname(), dstsuffix)
       suffix = suffix.replace(':', '')
       dst = op.join(self.root, suffix)
-      
+
       assert dst.startswith(self.root)
- 
+
       done = False
 
       print(f'{fpath} -> {self}...', end='')
@@ -266,8 +268,8 @@ class Storage(StorageDBModel):
         dstdir = op.dirname(dst)
         os.makedirs(dstdir, exist_ok=True)
 
-        ifh = os.open(fpath, os.O_RDONLY)
-        ofh = os.open(dst, os.O_WRONLY | os.O_CREAT)
+        ifh = os.open(fpath, os.O_RDONLY | O_BINARY)
+        ofh = os.open(dst, os.O_WRONLY | os.O_CREAT | O_BINARY)
 
         m = sha256()
         while not done:

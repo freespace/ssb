@@ -271,7 +271,7 @@ class Storage(StorageDBModel):
 
         m = sha256()
         while not done:
-          buf = os.read(ifh, 16*1024*1024)
+          buf = os.read(ifh, 4*1024)
           m.update(buf)
           if len(buf):
             byteswritten = 0

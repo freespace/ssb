@@ -133,4 +133,10 @@ out of space run it a few more times with `--resume-using`. Each time
 SSB will try to find space for new files and maybe allow a backup
 to complete even though the first run doesn't.
 
+Duplicate Files
+---------------
 
+Related to the above the same file may not be backed up to the same
+Storage across backup runs, e.g. if you specify Storage in a different
+order. This could be fixed by aggregating all known Storages when
+backing up.

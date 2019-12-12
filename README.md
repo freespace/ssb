@@ -109,3 +109,28 @@ Use cases
 1. SSB finishes backing up onto C, writes `BackupSet` into C with
    `sequence_number` of 2 and `is_final` of 1.
 1. Backup complete!
+
+Limitations
+===========
+
+So many...
+
+Inefficient Use of Storage
+--------------------------
+
+SSB doesn't try to optimise storage utilisation by distributing large
+and small files. e.g. If there is a big file that cannot be stored in
+storage A SSB will automatically move to the storage B even though the
+next file may fit on A. This is because SSB doesn't use OS specific
+means of working out how much storage is on A, which means it has to
+workout of the file fits on known Storages by attempting to write it out
+which is very expensive time wise. Additionally SSB doesn't enumerate
+all files and their sizes prior to backup. Therefore SSB has no way of
+knowing that there is a subsequent file that will fit on A.
+
+This can be worked around by running the backup once, and when it runs
+out of space run it a few more times with `--resume-using`. Each time
+SSB will try to find space for new files and maybe allow a backup
+to complete even though the first run doesn't.
+
+

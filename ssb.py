@@ -12,7 +12,6 @@ from hashlib import sha256
 import peewee as pw
 
 import click
-from tqdm import tqdm
 
 STORAGE_DB = pw.SqliteDatabase(None)
 STORAGE_DB_PREFIX='ssb-storage'
@@ -79,8 +78,15 @@ class BackupLog(LogDBModel):
     print('Using existing log', backup_log)
     return backup_log
 
-  def log(self, fpath, storage):
-    pass
+  def log(self, file_transaction, storage):
+    entry = BackupLogEntry(source_path=file_transaction.source_path,
+                           dest_path=file_transaction.dest_path,
+                           size=file_transaction.size,
+                           timestamp=file_transaction.timestamp,
+                           sha256_hash=file_transaction.sha256_hash,
+                           storage_uuid=storage.uuid)
+    entry.save()
+
 
 class BackupSet(StorageDBModel):
   backup_dirs = pw.CharField(max_length=1024)
@@ -109,6 +115,18 @@ class Storage(StorageDBModel):
 
   def __str__(self):
     return f'Storage(root={self.root})'
+
+  def record_transaction(self, src, dst, sha256hash, bk_set):
+    src_size = os.stat(src).st_size
+    ft = FileTransaction(source_path=src,
+                         dest_path=dst,
+                         size=src_size,
+                         timestamp=datetime.utcnow(),
+                         sha256_hash=sha256hash,
+                         version=1,
+                         backup_set=bk_set)
+    ft.save()
+    return ft
 
   @classmethod
   def init(cls, dirpath, reuse=True):
@@ -150,7 +168,7 @@ class Storage(StorageDBModel):
 
     return storage
 
-  def backup_file(self, fpath):
+  def backup_file(self, fpath, bk_set):
     """
     Backsup the specified file.
 
@@ -159,49 +177,79 @@ class Storage(StorageDBModel):
     the space first.
 
     :param fpath: path to file to backup
-    :return: True if file backedup, False if there
-             is no space left to backup the file
+    :param bk_set: the BackupSet the file belongs to
+    :return: (FileTransaction, outofspace) ->
+    FileTransaction created if backup successful, None otherwise.
+    outofspace, True if backup failed due to lack of space in Storage,
+    False otherwise.
     """
     try:
       outofspace = False
+      tf = None
+
       # make really sure it is an absolute path
       fpath = op.abspath(fpath)
       dst = op.join(self.root, gethostname(), fpath[1:])
       assert dst.startswith(self.root)
-      
+
       done = False
 
       print(f'{fpath} -> {self}...', end='')
 
       if op.exists(dst) and is_same_size(fpath, dst):
-        done = True
         print('exists')
-      else: 
+
+        done = True
+        tf = FileTransaction.get(dest_path=dst)
+        assert tf, f'File {dst} exists but is not recorded in a FileTransaction'
+        tf = self.record_transaction(fpath, dst, tf.sha256hash, bk_set)
+      else:
+        # we do this to pre-allocate space for the transaction in the DB
+        # otherwise it is possible to copy the file but run out of space
+        # for it in the database so the backup goes unrecorded
+        tf = self.record_transaction(fpath, dst, '0'*64, bk_set)
+
         dstdir = op.dirname(dst)
         os.makedirs(dstdir, exist_ok=True)
 
         ifh = os.open(fpath, os.O_RDONLY)
         ofh = os.open(dst, os.O_WRONLY | os.O_CREAT)
 
-      while not done:
-        buf = os.read(ifh, 16*1024*1024)
-        if len(buf):
-          byteswritten = 0
-          while byteswritten < len(buf):
-            byteswritten += os.write(ofh, buf[byteswritten:])
-        else:
-          done = True
+        m = sha256()
+        while not done:
+          buf = os.read(ifh, 16*1024*1024)
+          m.update(buf)
+          if len(buf):
+            byteswritten = 0
+            while byteswritten < len(buf):
+              byteswritten += os.write(ofh, buf[byteswritten:])
+          else:
+            done = True
+        if done:
           print('done')
+          tf.sha256_hash = m.hexdigest()
+          tf.save()
     except OSError as ex:
       if ex.errno == 28:
         # this means we are out of space so we need to go
         # to the next storage
         outofspace = True
-        print('out of space')
+        print('out of space (file)')
       else:
+        print('Error', type(ex), ex)
+        raise ex
+    except pw.OperationalError as ex:
+      if str(ex) == 'database or disk is full':
+        outofspace = True
+        print('out of space (database)')
+      else:
+        print('Error', type(ex), ex)
         raise ex
     except Exception as ex:
+      print('Error', ex)
       raise ex
+    else:
+      assert is_same_size(fpath, dst)
     finally:
       try:
         os.close(ifh)
@@ -216,10 +264,8 @@ class Storage(StorageDBModel):
       if outofspace:
         # remove the partial file
         os.unlink(dst)
-      else:
-        assert is_same_size(fpath, dst)
 
-      return done
+      return tf, outofspace
 
 @click.group()
 def cli():
@@ -269,6 +315,10 @@ def backup(backup_dirs, storages, resume_log):
     return storage, new_bk_set
 
   storages = list(storages)
+
+  # we must do this before do anything else with BackupSet
+  # bc Storage.init() is called by next_storage() which
+  # opens the backing DB
   cur_storage, _ = next_storage()
 
   if backup_log.backup_set_uuid:
@@ -288,23 +338,29 @@ def backup(backup_dirs, storages, resume_log):
         fpath = op.join(root, fn)
         fpath_abs = op.abspath(fpath)
 
-        if not BackupLogEntry.select().filter(source_path=fpath_abs).exists():
+        # if the file exists in the backup log then skip it
+        if BackupLogEntry.select().filter(source_path=fpath_abs).exists():
+          print(f'Skip {fpath_abs}')
+        else:
           try:
             done = False
             while not done:
-              done = cur_storage.backup_file(fpath_abs)
-              if not done:
+              file_transaction, outofspace = cur_storage.backup_file(fpath_abs, cur_bk_set)
+              if outofspace:
                 cur_storage, cur_bk_set = next_storage(cur_bk_set)
                 if cur_storage is None:
                   # we have no more storage left, bail!
                   backup_log.save()
                   print(f'No more Storage left. Attach additional Storage and resume using '
-                        f'\n\t{sys.argv[0]} --resume-using {backup_log.db_path} ...')
+                        f'\n\t{sys.argv[0]} --resume-using {backup_log.db_path} ...'
+                        f'\nOr run again and see if we can fit smaller files around existinf files')
                   return
+              else:
+                assert file_transaction, 'Not out of space but also no file transaction recorded'
+                backup_log.log(file_transaction, cur_storage)
+                done = True
           except Exception as ex:
             raise ex
-          else:
-            backup_log.log(fpath_abs, cur_storage)
 
   print('Backup complete')
 
